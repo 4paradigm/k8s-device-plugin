@@ -17,9 +17,12 @@
 package config
 
 var (
-	HttpBind           string
-	SchedulerName      string
-	DefaultMem         int32
-	DefaultCores       int32
-	MetricsBindAddress string
+	HttpBind                  string
+	SchedulerName             string
+	DefaultMem                int32
+	DefaultCores              int32
+	MetricsBindAddress        string
+	TotalCoreNodeWeight       float32
+	CountNodeWeight           float32
+	NodePodantiaffinityWeight float32
 )

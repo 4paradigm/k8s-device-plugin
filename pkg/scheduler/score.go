@@ -17,6 +17,8 @@
 package scheduler
 
 import (
+	"4pd.io/k8s-vgpu/pkg/scheduler/config"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"sort"
 	"strings"
 
@@ -182,10 +184,10 @@ func fitInDevices(node *NodeUsage, requests []util.ContainerDeviceRequest, annos
 			return false, 0, devs
 		}
 	}
-	return true, float32(total)/float32(free) + float32(len(node.Devices)-sums), devs
+	return true, float32(free)/float32(total)*100 + float32(len(node.Devices)-sums)*10, devs
 }
 
-func calcScore(nodes *map[string]*NodeUsage, errMap *map[string]string, nums [][]util.ContainerDeviceRequest, annos map[string]string, task *v1.Pod) (*NodeScoreList, error) {
+func calcScore(nodes *map[string]*NodeUsage, errMap *map[string]string, nums [][]util.ContainerDeviceRequest, annos map[string]string, task *v1.Pod, podInfo map[k8stypes.UID]*podInfo) (*NodeScoreList, error) {
 	res := make(NodeScoreList, 0, len(*nodes))
 	for nodeID, node := range *nodes {
 		viewStatus(*node)
@@ -213,8 +215,36 @@ func calcScore(nodes *map[string]*NodeUsage, errMap *map[string]string, nums [][
 			}
 		}
 		if len(score.devices) == len(nums) {
+			// 增加宿主维度打分项
+			UsedCoresNode, TotalCoreNode, UsedNode, CountNode := int32(0), int32(0), int32(0), int32(0)
+			for _, val := range node.Devices {
+				UsedCoresNode += val.Usedcores
+				TotalCoreNode += val.Totalcore
+				UsedNode += val.Used
+				CountNode += val.Count
+			}
+			// 增加宿主维度pod容量打分项
+			UsedCoresNodeScore := (1 - float32(UsedCoresNode)/float32(TotalCoreNode)) * 100 * config.TotalCoreNodeWeight
+			// 增加宿主维度pod隔离分配量打分项
+			UsedNodeScore := (1 - float32(UsedNode)/float32(CountNode)) * 100 * config.CountNodeWeight
+			klog.InfoS("calcScore:pod fit TotalCoreNode score results", "pod", klog.KObj(task), "node", nodeID, "score", UsedCoresNodeScore)
+			klog.InfoS("calcScore:pod fit CountNode score results", "pod", klog.KObj(task), "node", nodeID, "score", UsedNodeScore)
+			score.score += UsedCoresNodeScore + UsedNodeScore
 			res = append(res, &score)
 		}
+	}
+	// 增加反亲和性打分
+	for _, val1 := range res {
+		count := 0
+		for val2 := range podInfo {
+			if val1.nodeID == podInfo[val2].NodeID {
+				count++
+			}
+		}
+		podCount := len(podInfo)
+		NodePodantiaffinityScore := (1 - float32(count)/float32(podCount)) * 100 * config.NodePodantiaffinityWeight
+		val1.score += NodePodantiaffinityScore
+		klog.InfoS("calcScore:pod fit NodePodantiaffinityScore score results", "pod", klog.KObj(task), "node", val1.nodeID, "score", NodePodantiaffinityScore)
 	}
 	return &res, nil
 }
